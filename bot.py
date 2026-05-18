@@ -14,15 +14,16 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
-PDF_DPI = 400
-IMG_DPI = 600
+PDF_DPI = int(os.environ.get("PDF_DPI", 200))
+IMG_DPI = int(os.environ.get("IMG_DPI", 300))
 MAX_FILE_SIZE = 45 * 1024 * 1024
+MAX_WORKERS = int(os.environ.get("MAX_WORKERS", 2))
 
 
 def remove_watermark_from_page(page, mat_img, page_rect, pdf_scale):
     pix = page.get_pixmap(matrix=mat_img, alpha=False)
     img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-    data = np.array(img)
+    data = np.array(img, dtype=np.uint8)
 
     r = data[:, :, 0].astype(np.int16)
     g = data[:, :, 1].astype(np.int16)
@@ -33,6 +34,7 @@ def remove_watermark_from_page(page, mat_img, page_rect, pdf_scale):
     data[red_mask | ghost_mask] = [255, 255, 255]
 
     clean_img = Image.fromarray(data)
+    del data, r, g, b, red_mask, ghost_mask
 
     png_buf = io.BytesIO()
     clean_img.save(png_buf, format="PNG")
@@ -41,9 +43,11 @@ def remove_watermark_from_page(page, mat_img, page_rect, pdf_scale):
     pdf_w = int(page_rect.width * pdf_scale)
     pdf_h = int(page_rect.height * pdf_scale)
     pdf_img = clean_img.resize((pdf_w, pdf_h), Image.LANCZOS)
+    del clean_img
 
     jpg_buf = io.BytesIO()
-    pdf_img.save(jpg_buf, format="JPEG", quality=95)
+    pdf_img.save(jpg_buf, format="JPEG", quality=85)
+    del pdf_img
 
     return png_bytes, jpg_buf.getvalue()
 
@@ -60,7 +64,7 @@ def process_pdf_bytes(pdf_bytes):
     pdf_pages = [None] * total_pages
     png_pages = [None] * total_pages
 
-    workers = min(os.cpu_count() or 2, total_pages)
+    workers = min(MAX_WORKERS, total_pages)
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futures = {
             ex.submit(remove_watermark_from_page, doc[i], mat_img, page_rects[i], pdf_scale): i
