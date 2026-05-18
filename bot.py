@@ -1,6 +1,5 @@
 import os
 import io
-import zipfile
 import asyncio
 import logging
 import fitz
@@ -83,18 +82,13 @@ def process_pdf_bytes(pdf_bytes):
     out_pdf.close()
     doc.close()
 
-    zip_buf = io.BytesIO()
-    with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for i in range(total_pages):
-            zf.writestr(f"page_{i + 1:03d}.png", png_pages[i])
-
-    return pdf_buf.getvalue(), zip_buf.getvalue()
+    return pdf_buf.getvalue(), png_pages
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Send me a PDF file and I'll remove watermarks (red marks/ghost pixels) "
-        "from it. I'll return the cleaned PDF plus a zip of high-quality page images."
+        "from it. I'll return the cleaned PDF plus each page as a high-quality image."
     )
 
 
@@ -122,7 +116,7 @@ async def handle_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await status.edit_text(f"Processing {msg.document.file_name} ({len(pdf_bytes) / 1024 / 1024:.1f}MB)...")
     try:
-        cleaned_pdf, images_zip = await asyncio.get_running_loop().run_in_executor(
+        cleaned_pdf, page_images = await asyncio.get_running_loop().run_in_executor(
             None, process_pdf_bytes, bytes(pdf_bytes)
         )
     except Exception as e:
@@ -141,14 +135,15 @@ async def handle_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await msg.reply_text(f"Could not send PDF (may exceed Telegram's 50MB limit): {e}")
 
-    await status.edit_text("Sending page images...")
-    try:
-        await msg.reply_document(
-            document=images_zip,
-            filename=f"{name}_images.zip",
-        )
-    except Exception as e:
-        await msg.reply_text(f"Could not send images zip: {e}")
+    await status.edit_text(f"Sending {len(page_images)} page images...")
+    for i, png_bytes in enumerate(page_images):
+        try:
+            await msg.reply_document(
+                document=png_bytes,
+                filename=f"{name}_page_{i + 1:03d}.png",
+            )
+        except Exception as e:
+            await msg.reply_text(f"Could not send page {i + 1}: {e}")
 
     await status.delete()
 
